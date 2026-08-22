@@ -92,6 +92,8 @@ pip install -r requirements.txt
 # 2. Configure environment
 cp .env.example .env
 # Edit .env — set NVIDIA_API_KEY and EXTRACTOR_TYPE=nvidia
+# Note: The architecture is modular and supports ANY LLM API (OpenAI, Anthropic, Ollama, etc.) 
+# via the BaseExtractor interface, but NVIDIA Nemotron is pre-configured for best results.
 # (leave EXTRACTOR_TYPE=mock to run without an API key — see Additional Notes)
 
 # 3. Process the starter PDFs

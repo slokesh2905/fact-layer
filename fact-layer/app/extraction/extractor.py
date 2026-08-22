@@ -136,6 +136,58 @@ class OllamaExtractor(LLMExtractor):
             return {"relationship": "unrelated", "explanation": "Failed to parse", "confidence": 0.0}
 
 
+class OpenAIExtractor(LLMExtractor):
+    def __init__(self):
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+        )
+        self.model = settings.openai_model
+        self.max_tokens = 2000
+        self.temperature = 0.1
+
+    async def extract(self, messages: List[Dict[str, str]]) -> str:
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content or "{}"
+
+    async def reconcile(self, fact_a: Dict, fact_b: Dict) -> Dict[str, Any]:
+        prompt = RECONCILIATION_PROMPT.format(
+            source_a=fact_a.get("source_dataset", "Unknown"),
+            entity_a=fact_a.get("entity", ""),
+            attribute_a=fact_a.get("attribute", ""),
+            value_a=fact_a.get("value", ""),
+            unit_a=fact_a.get("unit", ""),
+            period_a=fact_a.get("time_period", ""),
+            scope_a=fact_a.get("scope", ""),
+            qualifier_a=fact_a.get("qualifier", ""),
+            evidence_a=fact_a.get("raw_evidence", "")[:200],
+            source_b=fact_b.get("source_dataset", "Unknown"),
+            entity_b=fact_b.get("entity", ""),
+            attribute_b=fact_b.get("attribute", ""),
+            value_b=fact_b.get("value", ""),
+            unit_b=fact_b.get("unit", ""),
+            period_b=fact_b.get("time_period", ""),
+            scope_b=fact_b.get("scope", ""),
+            qualifier_b=fact_b.get("qualifier", ""),
+            evidence_b=fact_b.get("raw_evidence", "")[:200],
+        )
+        messages = [
+            {"role": "system", "content": "You are a precise fact comparison engine. Return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self.extract(messages)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"relationship": "unrelated", "explanation": "Failed to parse", "confidence": 0.0}
+
+
 class MockExtractor(LLMExtractor):
     """Mock extractor for demo/testing without API keys. Does pattern-based extraction from text."""
 
@@ -490,6 +542,12 @@ def get_extractor() -> LLMExtractor:
             return NVIDIAExtractor()
         except Exception as e:
             logger.warning(f"NVIDIA extractor failed, falling back to mock: {e}")
+            return MockExtractor()
+    elif extractor_type == "openai":
+        try:
+            return OpenAIExtractor()
+        except Exception as e:
+            logger.warning(f"OpenAI extractor failed, falling back to mock: {e}")
             return MockExtractor()
     elif extractor_type == "ollama":
         try:

@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1"
 
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+
     database_url: str = "sqlite:///./data/fact_layer.db"
     chroma_dir: str = "./data/chroma"
     upload_dir: str = "./data/uploads"
