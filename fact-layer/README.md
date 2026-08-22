@@ -44,7 +44,7 @@ python process_starter_data.py
 
 This processes all 6 PDFs in the starter datasets, extracts facts with evidence, and runs cross-document relationship analysis.
 
-### 4. (Optional) Backfill Semantic Search Index
+### 4. Backfill Semantic Search Index (Optional)
 
 If you already have facts in the database from a previous run:
 
@@ -101,7 +101,7 @@ fact-layer/
 ## API Endpoints
 
 | Endpoint | Description |
-|----------|-------------|
+|:---|:---|
 | `POST /api/documents/upload` | Upload a PDF — triggers async processing |
 | `GET /api/documents` | List all documents with status |
 | `GET /api/documents/{id}/status` | Poll processing status |
@@ -140,31 +140,35 @@ The **Cases** tab in the UI shows all four required cases with source evidence:
 ## Architecture
 
 ```
-PDF
- │
- ▼
-PDFParser + Chunker
- │
- ▼  (chunks processed concurrently — asyncio.gather + semaphore)
-LLM Extractor  ──────────────────────────────────────────────────┐
- │                                                                │
- ▼  (checkpoint every 10 pages — crash-safe, resumable)         │
-SQLite (Documents, Facts, Relationships)                         │
- │                                                                │
- ├──► ChromaDB (vector embeddings — auto-indexed per fact)       │
- │         └── POST /search/semantic                             │
- │                                                                │
- ▼  (incremental — only new facts compared against existing)     │
-RelationshipDetector (corroborates / contradicts / reconciles) ◄─┘
- │
- ▼
-FastAPI  ◄──►  Streamlit UI
+				PDF
+				 │
+				 ▼
+		  PDFParser + Chunker
+				 │
+				 ▼   (concurrent — asyncio.gather + semaphore)
+			 LLM Extractor
+				 │
+				 ▼   (checkpoint every 10 pages — crash-safe, resumable)
+	SQLite (Documents, Facts, Relationships)
+				 │
+				 ├────────────────────────────┐
+				 │                             ▼
+				 │              ChromaDB (vector embeddings,
+				 │               auto-indexed per fact)
+				 │                             │
+				 │               POST /api/search/semantic
+				 │
+				 ▼   (incremental — new facts vs. existing only)
+   RelationshipDetector (corroborates / contradicts / reconciles)
+				 │
+				 ▼
+		  FastAPI   ◄──►   Streamlit UI
 ```
 
 ### Key Design Decisions
 
 | Decision | Rationale |
-|---|---|
+|:---|:---|
 | **SQLite as primary store** | Zero setup, portable, sufficient for prototype scale |
 | **ChromaDB as search index** | Additive to SQLite — failures are non-fatal, SQLite is always source of truth |
 | **Concurrent chunk extraction** | `asyncio.gather` per 10-page window, bounded by semaphore — 3× faster vs. serial |
@@ -179,7 +183,7 @@ FastAPI  ◄──►  Streamlit UI
 Key settings in `.env` (see `.env.example` for full list):
 
 | Variable | Default | Description |
-|---|---|---|
+|:---|:---|:---|
 | `NVIDIA_API_KEY` | — | API key for NVIDIA Nemotron extraction |
 | `EXTRACTOR_TYPE` | `mock` | `nvidia` / `ollama` / `mock` |
 | `DATABASE_URL` | `sqlite:///./data/fact_layer.db` | SQLite path |
@@ -206,7 +210,7 @@ streamlit run ui/streamlit_app.py --server.port 8501  # 6. Start UI
 
 ## Video Demo
 
-![System Demo Recording](demo.webp)
+[**Link to 3-minute Video Demo**](YOUR_VIDEO_LINK_HERE) *(Please insert your video link here!)*
 
 ---
 
