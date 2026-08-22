@@ -89,7 +89,7 @@ def _post(endpoint: str, json=None, files=None, data=None):
             if files:
                 r = requests.post(f"{API_BASE}{endpoint}", files=files, data=data, timeout=120)
             else:
-                r = requests.post(f"{API_BASE}{endpoint}", json=json, timeout=60)
+                r = requests.post(f"{API_BASE}{endpoint}", json=json, timeout=300)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.ConnectionError:
