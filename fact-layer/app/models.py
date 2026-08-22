@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
 from sqlalchemy import (
-    Column, String, Text, Integer, Float, DateTime, ForeignKey, Enum, Index, JSON
+    Column, String, Text, Integer, Float, DateTime, ForeignKey, Enum, Index, JSON, UniqueConstraint
 )
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.orm import relationship, declared_attr
@@ -116,6 +116,8 @@ class FactRelationship(Base):
         Index("ix_relationships_fact_a", "fact_id_a"),
         Index("ix_relationships_fact_b", "fact_id_b"),
         Index("ix_relationships_type", "relationship_type"),
+        # Enforce one relationship row per fact pair (canonical: fact_id_a < fact_id_b)
+        UniqueConstraint("fact_id_a", "fact_id_b", name="uq_relationship_pair"),
     )
 
 

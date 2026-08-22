@@ -129,12 +129,12 @@ class RelationshipDetector:
         self.resolver = EntityResolver(db)
         self.new_document_id = new_document_id
 
-    async def find_relationships(self) -> List[FactRelationship]:
+    async def find_relationships(self, known_pairs: set = None) -> List[FactRelationship]:
         if self.new_document_id:
-            return await self._find_incremental()
-        return await self._find_full()
+            return await self._find_incremental(known_pairs or set())
+        return await self._find_full(known_pairs or set())
 
-    async def _find_incremental(self) -> List[FactRelationship]:
+    async def _find_incremental(self, known_pairs: set) -> List[FactRelationship]:
         """Compare only the new document's facts against all existing facts."""
         new_facts = self.db.query(Fact).filter(
             Fact.document_id == self.new_document_id
@@ -154,28 +154,28 @@ class RelationshipDetector:
             key = f"{f.entity_normalized}|{f.attribute_normalized}"
             existing_by_key[key].append(f)
 
-        relationships = []
+        candidate_pairs = []
         for new_fact in new_facts:
             key = f"{new_fact.entity_normalized}|{new_fact.attribute_normalized}"
             candidates = existing_by_key.get(key, [])
             for existing_fact in candidates:
                 if self.comparator.should_compare(new_fact, existing_fact):
-                    rel = await self._detect_relationship(new_fact, existing_fact)
-                    if rel:
-                        rel.triggered_by_document_id = self.new_document_id
-                        relationships.append(rel)
+                    candidate_pairs.append((new_fact, existing_fact))
 
+        logger.info(f"Incremental: {len(candidate_pairs)} candidate pairs to evaluate")
+        relationships = await self._detect_all_parallel(candidate_pairs, known_pairs)
         logger.info(f"Incremental found {len(relationships)} new relationships")
         return relationships
 
-    async def _find_full(self) -> List[FactRelationship]:
+    async def _find_full(self, known_pairs: set) -> List[FactRelationship]:
         """Full reanalysis — load all facts grouped by entity+attribute."""
         groups = self.db.query(
             Fact.entity_normalized,
             Fact.attribute_normalized,
         ).distinct().all()
 
-        relationships = []
+        # Collect all candidate pairs first
+        candidate_pairs = []
         for entity, attribute in groups:
             group_facts = self.db.query(Fact).filter(
                 Fact.entity_normalized == entity,
@@ -188,11 +188,57 @@ class RelationshipDetector:
             for i, fact_a in enumerate(group_facts):
                 for fact_b in group_facts[i + 1:]:
                     if self.comparator.should_compare(fact_a, fact_b):
-                        rel = await self._detect_relationship(fact_a, fact_b)
-                        if rel:
-                            relationships.append(rel)
+                        candidate_pairs.append((fact_a, fact_b))
 
+        logger.info(f"Full analysis: {len(candidate_pairs)} candidate pairs to evaluate")
+        relationships = await self._detect_all_parallel(candidate_pairs, known_pairs)
         logger.info(f"Full analysis found {len(relationships)} relationships")
+        return relationships
+
+    async def _detect_all_parallel(
+        self,
+        pairs: List[tuple],
+        known_pairs: set = None,
+        concurrency: int = 10,
+    ) -> List[FactRelationship]:
+        """Run _detect_relationship for all pairs in parallel, bounded by a semaphore.
+        Skips pairs that already have a stored relationship (known_pairs set).
+        """
+        import asyncio
+        known_pairs = known_pairs or set()
+
+        # Filter out pairs we already know about — no need to call the LLM again
+        new_pairs = []
+        for fact_a, fact_b in pairs:
+            canonical = tuple(sorted([fact_a.id, fact_b.id]))
+            if canonical not in known_pairs:
+                new_pairs.append((fact_a, fact_b))
+
+        skipped = len(pairs) - len(new_pairs)
+        logger.info(f"Skipping {skipped} already-analyzed pairs; calling LLM for {len(new_pairs)} new pairs")
+
+        if not new_pairs:
+            return []
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _bounded(fact_a: Fact, fact_b: Fact, triggered_by: Optional[str] = None):
+            async with semaphore:
+                rel = await self._detect_relationship(fact_a, fact_b)
+                if rel and triggered_by:
+                    rel.triggered_by_document_id = triggered_by
+                return rel
+
+        triggered = self.new_document_id
+        tasks = [_bounded(a, b, triggered) for a, b in new_pairs]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        relationships = []
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error(f"Parallel detect failed: {r}")
+            elif r is not None:
+                relationships.append(r)
         return relationships
 
     async def _detect_relationship(self, fact_a: Fact, fact_b: Fact) -> Optional[FactRelationship]:
@@ -201,6 +247,7 @@ class RelationshipDetector:
             return None
 
         if comparison.get("same", False):
+
             rel_type = RelationshipType.CORROBORATES
             explanation = f"Values agree: {fact_a.value} {fact_a.unit or ''} ≈ {fact_b.value} {fact_b.unit or ''}"
             confidence = 0.9
@@ -276,27 +323,46 @@ async def detect_relationships_async(
     Async entry point — called from the pipeline which already runs inside
     an event loop (asyncio.run in process_document).
     Incremental mode: only re-evaluates relationships touching the new document.
-    Full mode: rebuilds all relationships from scratch.
+    Full mode: upserts all relationships (preserves existing records, updates changed ones).
+    Skips LLM calls for pairs that are already stored in the DB.
     """
-    if new_document_id:
-        # Incremental: only delete relationships involving the new document
-        new_fact_ids = db.query(Fact.id).filter(
-            Fact.document_id == new_document_id
-        ).subquery()
-        db.query(FactRelationship).filter(
-            (FactRelationship.fact_id_a.in_(new_fact_ids)) |
-            (FactRelationship.fact_id_b.in_(new_fact_ids))
-        ).delete(synchronize_session="fetch")
-    else:
-        # Full reanalysis
-        db.query(FactRelationship).delete()
-    db.commit()
+    # Pre-load all existing canonical pairs so we can skip LLM calls for known ones
+    existing_rels = db.query(
+        FactRelationship.fact_id_a,
+        FactRelationship.fact_id_b,
+    ).all()
+    known_pairs: set = {tuple(sorted([a, b])) for a, b in existing_rels}
+    logger.info(f"Pre-loaded {len(known_pairs)} already-known relationship pairs")
 
     detector = RelationshipDetector(db, extractor, new_document_id=new_document_id)
-    relationships = await detector.find_relationships()
+    relationships = await detector.find_relationships(known_pairs=known_pairs)
 
+    upserted = 0
+    inserted = 0
     for rel in relationships:
-        db.add(rel)
-    db.commit()
+        # Build a canonical pair — always store lower id first so (A,B) and (B,A) hit the same row
+        id_a, id_b = sorted([rel.fact_id_a, rel.fact_id_b])
+        existing = (
+            db.query(FactRelationship)
+            .filter(
+                FactRelationship.fact_id_a == id_a,
+                FactRelationship.fact_id_b == id_b,
+            )
+            .first()
+        )
+        if existing:
+            # Update in place — preserve the original id and detected_at
+            existing.relationship_type = rel.relationship_type
+            existing.explanation = rel.explanation
+            existing.confidence = rel.confidence
+            existing.triggered_by_document_id = rel.triggered_by_document_id
+            upserted += 1
+        else:
+            rel.fact_id_a = id_a
+            rel.fact_id_b = id_b
+            db.add(rel)
+            inserted += 1
 
+    db.commit()
+    logger.info(f"Upsert complete: {inserted} inserted, {upserted} updated")
     return relationships

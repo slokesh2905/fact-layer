@@ -72,12 +72,17 @@ async def delete_document(document_id: str, db: Session = Depends(get_db)):
 
     filename = doc.filename
     file_path = doc.file_path
+
+    # Explicitly delete relationships tied to this document's facts first
     fact_ids = [row[0] for row in db.query(Fact.id).filter(Fact.document_id == document_id).all()]
     if fact_ids:
         db.query(FactRelationship).filter(
             (FactRelationship.fact_id_a.in_(fact_ids))
             | (FactRelationship.fact_id_b.in_(fact_ids))
         ).delete(synchronize_session=False)
+
+    # Explicitly delete facts for this document
+    db.query(Fact).filter(Fact.document_id == document_id).delete(synchronize_session=False)
 
     db.delete(doc)
     db.commit()
@@ -432,15 +437,62 @@ async def get_processing_jobs(document_id: str, db: Session = Depends(get_db)):
 
 @router.post("/analyze/relationships")
 async def trigger_relationship_analysis(db: Session = Depends(get_db)):
-    from app.analysis import detect_relationships
+    from app.analysis.relationships import detect_relationships_async
     from app.extraction import FactExtractor
 
     extractor = FactExtractor()
-    relationships = detect_relationships(db, extractor)
+    relationships = await detect_relationships_async(db, extractor)
 
     return {
         "message": f"Analysis complete. Found {len(relationships)} relationships.",
         "relationships_count": len(relationships)
+    }
+
+
+@router.post("/relationships/deduplicate")
+async def deduplicate_relationships(db: Session = Depends(get_db)):
+    """
+    Remove duplicate relationship rows for the same fact pair.
+    Keeps the row with the highest confidence; breaks ties by keeping
+    the most recently detected one.
+    Also normalises all rows so fact_id_a < fact_id_b (canonical order).
+    """
+    all_rels = db.query(FactRelationship).all()
+
+    # Group by canonical (min_id, max_id) pair
+    groups: dict = {}
+    for rel in all_rels:
+        key = tuple(sorted([rel.fact_id_a, rel.fact_id_b]))
+        groups.setdefault(key, []).append(rel)
+
+    deleted = 0
+    normalised = 0
+    for (id_a, id_b), rels in groups.items():
+        # Sort: best confidence first, then most recent
+        rels_sorted = sorted(
+            rels,
+            key=lambda r: (r.confidence, r.detected_at),
+            reverse=True,
+        )
+        keeper = rels_sorted[0]
+
+        # Normalise canonical order on the keeper
+        if keeper.fact_id_a != id_a or keeper.fact_id_b != id_b:
+            keeper.fact_id_a = id_a
+            keeper.fact_id_b = id_b
+            normalised += 1
+
+        # Delete the rest
+        for dup in rels_sorted[1:]:
+            db.delete(dup)
+            deleted += 1
+
+    db.commit()
+    return {
+        "message": f"Deduplication complete.",
+        "duplicates_removed": deleted,
+        "rows_normalised": normalised,
+        "remaining_relationships": db.query(func.count(FactRelationship.id)).scalar(),
     }
 
 

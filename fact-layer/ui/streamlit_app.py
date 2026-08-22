@@ -86,10 +86,12 @@ def _get(endpoint: str, params: dict = None):
 def _post(endpoint: str, json=None, files=None, data=None):
     with st.spinner("Processing..."):
         try:
+            # Re-analysis can take several minutes (many LLM calls) — use a longer timeout for it
+            timeout = 300 if endpoint == "/analyze/relationships" else 60
             if files:
-                r = requests.post(f"{API_BASE}{endpoint}", files=files, data=data, timeout=120)
+                r = requests.post(f"{API_BASE}{endpoint}", files=files, data=data, timeout=timeout)
             else:
-                r = requests.post(f"{API_BASE}{endpoint}", json=json, timeout=60)
+                r = requests.post(f"{API_BASE}{endpoint}", json=json, timeout=timeout)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.ConnectionError:
@@ -444,7 +446,7 @@ def render_relationships():
     st.caption("All detected relationships between facts across documents — click a row to see full evidence side by side.")
 
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         rel_filter = st.radio(
             "Filter by type",
@@ -452,11 +454,20 @@ def render_relationships():
             horizontal=True,
         )
     with col2:
-        if st.button("Re-run full analysis", help="Reanalyse all documents from scratch"):
+        if st.button("Re-run full analysis", help="Detect any new relationships not yet analysed"):
             with st.spinner("Running..."):
                 result = _post("/analyze/relationships")
                 if result:
                     st.success(result.get("message", "Done"))
+                    st.rerun()
+    with col3:
+        if st.button("🧹 Deduplicate", help="Remove duplicate relationship rows, keeping the highest-confidence entry per fact pair"):
+            with st.spinner("Deduplicating..."):
+                result = _post("/relationships/deduplicate")
+                if result:
+                    removed = result.get("duplicates_removed", 0)
+                    remaining = result.get("remaining_relationships", "?")
+                    st.success(f"Removed {removed} duplicates — {remaining} relationships remain.")
                     st.rerun()
 
     params = {"limit": 200}
