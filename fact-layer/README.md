@@ -206,7 +206,7 @@ streamlit run ui/streamlit_app.py --server.port 8501  # 6. Start UI
 
 ## Video Demo
 
-[**Link to 3-minute Video Demo**](YOUR_VIDEO_LINK_HERE) *(Please insert your video link here!)*
+![System Demo Recording](demo.webp)
 
 ---
 
