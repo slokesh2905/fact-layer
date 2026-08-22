@@ -1,0 +1,37 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+win_venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data & DB
+data/
+*.db
+*.sqlite3
+chroma/
+
+# Logs
+logs/
+*.log
