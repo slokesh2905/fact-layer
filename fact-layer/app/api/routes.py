@@ -432,11 +432,11 @@ async def get_processing_jobs(document_id: str, db: Session = Depends(get_db)):
 
 @router.post("/analyze/relationships")
 async def trigger_relationship_analysis(db: Session = Depends(get_db)):
-    from app.analysis import detect_relationships
+    from app.analysis import detect_relationships_async
     from app.extraction import FactExtractor
 
     extractor = FactExtractor()
-    relationships = detect_relationships(db, extractor)
+    relationships = await detect_relationships_async(db, extractor)
 
     return {
         "message": f"Analysis complete. Found {len(relationships)} relationships.",
